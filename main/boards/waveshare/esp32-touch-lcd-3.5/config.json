@@ -1,5 +1,6 @@
 {
     "target": "esp32",
+    "manufacturer": "waveshare",
     "builds": [
         {
             "name": "esp32-touch-lcd-3.5"
