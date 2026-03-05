@@ -1,51 +1,61 @@
-# 编译配置命令
+# AtomS3R + EchoPyramid
 
-**配置编译目标为 ESP32S3：**
+----------
+## 快速体验
+
+下载、安装 [M5Burner](https://docs.m5stack.com/zh_CN/uiflow/m5burner/intro) ，打开 M5Burner 搜索 EchoPyramid 下载小智固件，烧录。
+
+
+----------
+## 发布固件
+
+```shell
+python scripts/release.py atoms3r-echo-pyramid
+```
+
+生成的固件在 releases 目录下
+
+----------
+## 编译固件
+
+**配置编译目标为 ESP32S3 **
 
 ```bash
 idf.py set-target esp32s3
 ```
 
-**打开 menuconfig：**
+**配置**
 
 ```bash
 idf.py menuconfig
 ```
 
-**选择板子：**
+**选择板子**
 
 ```
-Xiaozhi Assistant -> Board Type -> M5Stack AtomS3R + Echo Pyramid
+Xiaozhi Assistant -> Board Type -> AtomS3R + Echo Pyramid
 ```
 
-**修改 flash 大小：**
+**修改 flash 大小**
 
 ```
 Serial flasher config -> Flash size -> 8 MB
 ```
 
-**修改分区表：**
+**选择分区表**
 
 ```
 Partition Table -> Custom partition CSV file -> partitions/v2/8m.csv
 ```
 
-**修改 psram 配置：**
+**修改 psram 配置**
 
 ```
 Component config -> ESP PSRAM -> SPI RAM config -> Mode (QUAD/OCT) -> Octal Mode PSRAM
 ```
 
-**编译：**
+**编译烧录固件**
 
 ```bash
-idf.py build
+idf.py build flash monitor
 ```
-
-## 使用说明
-
-Echo Pyramid 正常运行时请从 Pyramid 底座的 USB-C 口供电；AtomS3R 的 USB-C 口主要用于烧录。
-
-# 参考资料
-
-https://github.com/m5stack/M5Echo-Pyramid
