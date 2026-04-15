@@ -209,6 +209,11 @@ elseif(CONFIG_BOARD_TYPE_M5STACK_CORE_TAB5)
     set(BUILTIN_TEXT_FONT font_puhui_basic_30_4)
     set(BUILTIN_ICON_FONT font_awesome_30_4)
     set(DEFAULT_EMOJI_COLLECTION twemoji_64)
+elseif(CONFIG_BOARD_TYPE_M5STACK_CORE_P4)
+    set(BOARD_TYPE "m5stack-corep4")
+    set(BUILTIN_TEXT_FONT font_puhui_basic_30_4)
+    set(BUILTIN_ICON_FONT font_awesome_30_4)
+    set(DEFAULT_EMOJI_COLLECTION twemoji_64)
 elseif(CONFIG_BOARD_TYPE_M5STACK_ATOM_S3R_ECHO_PYRAMID)
     set(BOARD_TYPE "atoms3r-echo-pyramid")
     set(BUILTIN_TEXT_FONT font_puhui_basic_16_4)
@@ -926,6 +931,7 @@ idf_component_register(SRCS ${SOURCES}
                         console
                         efuse
                         bt
+                        esp_lcd_st7102
                     )
 
 # Use target_compile_definitions to define BOARD_TYPE, BOARD_NAME
