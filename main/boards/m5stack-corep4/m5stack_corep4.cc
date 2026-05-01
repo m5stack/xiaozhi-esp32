@@ -171,7 +171,7 @@ private:
 
     void InitializeIoExpander() {
         // IOE1 @ M5IOE1_DEFAULT_ADDR (0x6F), default bus speed — same as reference m5stack_corep4.
-        if (ioe_.begin(i2c_bus_, M5IOE1_DEFAULT_ADDR, M5IOE1_I2C_FREQ_DEFAULT, M5IOE1_INT_MODE_POLLING) !=
+        if (ioe_.begin(i2c_bus_, 0x4F, M5IOE1_I2C_FREQ_DEFAULT, M5IOE1_INT_MODE_POLLING) !=
             M5IOE1_OK) {
             ESP_LOGE(TAG, "M5IOE1 begin failed");
             return;
