@@ -1042,6 +1042,17 @@ if(CONFIG_BOARD_TYPE_ESP_VOCAT)
         espressif__touch_button_sensor
     )
 endif()
+if(BOARD_TYPE STREQUAL "m5stack-tab5")
+    list(APPEND MAIN_PRIV_REQUIRES_EXTRA
+        esp_lcd_st7121
+    )
+    list(APPEND SOURCES
+        "${CMAKE_CURRENT_SOURCE_DIR}/../components/esp_lcd_st7121/esp_lcd_st7121.c"
+    )
+    list(APPEND INCLUDE_DIRS
+        "${CMAKE_CURRENT_SOURCE_DIR}/../components/esp_lcd_st7121/include"
+    )
+endif()
 
 idf_component_register(SRCS ${SOURCES}
                     EMBED_FILES ${LANG_SOUNDS} ${COMMON_SOUNDS}
