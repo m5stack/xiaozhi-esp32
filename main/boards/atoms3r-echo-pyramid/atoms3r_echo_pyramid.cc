@@ -29,6 +29,9 @@
 #include <ssid_manager.h>
 #include <esp_lcd_panel_io.h>
 #include <esp_lcd_panel_ops.h>
+#include <driver/spi_master.h>
+#include <esp_lcd_panel_vendor.h>
+#include <inttypes.h>
 #include <esp_lcd_gc9a01.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -38,6 +41,13 @@
 
 
 #define TAG "AtomS3R+EchoPyramid"
+
+#define LCD_CS_GPIO     GPIO_NUM_14
+#define LCD_DC_GPIO     GPIO_NUM_42
+#define LCD_RST_GPIO    GPIO_NUM_48
+#define LCD_MOSI_GPIO   GPIO_NUM_21
+#define LCD_SCLK_GPIO   GPIO_NUM_15
+
 
 
 LV_IMAGE_DECLARE(click);
@@ -116,6 +126,22 @@ static const gc9a01_lcd_init_cmd_t gc9107_lcd_init_cmds[] = {
 
 class AtomS3rEchoPyramidBoard : public WifiBoard {
 private:
+    enum class LcdPanelType {
+        kGc9107,
+        kSt7735,
+    };
+
+    struct LcdPanelConfig {
+        LcdPanelType type;
+        const char* name;
+        int gap_x;
+        int gap_y;
+        bool mirror_x;
+        bool mirror_y;
+        bool swap_xy;
+        bool invert_color;
+    };
+
     i2c_master_bus_handle_t i2c_bus_external_;
     i2c_master_bus_handle_t i2c_bus_internal_;
     EchoPyramid* echo_pyramid_ = nullptr;
@@ -215,123 +241,167 @@ private:
     void InitializeSpi() {
         ESP_LOGI(TAG, "Initialize SPI bus");
         spi_bus_config_t buscfg = {};
-        buscfg.mosi_io_num = GPIO_NUM_21;
+        buscfg.mosi_io_num = LCD_MOSI_GPIO;
         buscfg.miso_io_num = GPIO_NUM_NC;
-        buscfg.sclk_io_num = GPIO_NUM_15;
+        buscfg.sclk_io_num = LCD_SCLK_GPIO;
         buscfg.quadwp_io_num = GPIO_NUM_NC;
         buscfg.quadhd_io_num = GPIO_NUM_NC;
         buscfg.max_transfer_sz = DISPLAY_WIDTH * DISPLAY_HEIGHT * sizeof(uint16_t);
         ESP_ERROR_CHECK(spi_bus_initialize(SPI3_HOST, &buscfg, SPI_DMA_CH_AUTO));
     }
 
-    void InitializeGc9107Display() {
-        ESP_LOGI(TAG, "Init GC9107 display");
+    void ResetLcdPanel() {
+        gpio_config_t reset_config = {};
+        reset_config.pin_bit_mask = BIT64(LCD_RST_GPIO);
+        reset_config.mode = GPIO_MODE_OUTPUT;
+        gpio_config(&reset_config);
+
+        gpio_set_level(LCD_RST_GPIO, 0);
+        vTaskDelay(pdMS_TO_TICKS(10));
+        gpio_set_level(LCD_RST_GPIO, 1);
+        vTaskDelay(pdMS_TO_TICKS(120));
+    }
+
+    uint32_t ReadLcdPanelId() {
+        ResetLcdPanel();
+
+        gpio_config_t cs_config = {};
+        cs_config.pin_bit_mask = BIT64(LCD_CS_GPIO);
+        cs_config.mode = GPIO_MODE_OUTPUT;
+        gpio_config(&cs_config);
+        gpio_set_level(LCD_CS_GPIO, 1);
+
+        spi_device_interface_config_t devcfg = {};
+        devcfg.clock_speed_hz = 16 * 1000 * 1000;
+        devcfg.mode = 0;
+        devcfg.spics_io_num = GPIO_NUM_NC;
+        devcfg.queue_size = 1;
+        devcfg.command_bits = 8;
+        devcfg.dummy_bits = 1;
+        devcfg.flags = SPI_DEVICE_HALFDUPLEX | SPI_DEVICE_3WIRE;
+
+        spi_device_handle_t spi = nullptr;
+        esp_err_t ret = spi_bus_add_device(SPI3_HOST, &devcfg, &spi);
+        if (ret != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to add SPI device for panel ID read: %s", esp_err_to_name(ret));
+            return 0;
+        }
+
+        spi_transaction_t wake = {};
+        wake.length = 8;
+        wake.flags = SPI_TRANS_USE_TXDATA;
+        wake.tx_data[0] = 0x00;
+        ret = spi_device_polling_transmit(spi, &wake);
+
+        spi_transaction_t trans = {};
+        trans.cmd = 0x04; // RDDID
+        trans.rxlength = 32;
+        trans.flags = SPI_TRANS_USE_RXDATA;
+        gpio_set_level(LCD_CS_GPIO, 0);
+        if (ret == ESP_OK) {
+            ret = spi_device_polling_transmit(spi, &trans);
+        }
+        gpio_set_level(LCD_CS_GPIO, 1);
+        spi_bus_remove_device(spi);
+
+        if (ret != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to read LCD panel ID: %s", esp_err_to_name(ret));
+            return 0;
+        }
+
+        uint32_t id = (static_cast<uint32_t>(trans.rx_data[0]) << 24) |
+                      (static_cast<uint32_t>(trans.rx_data[1]) << 16) |
+                      (static_cast<uint32_t>(trans.rx_data[2]) << 8) |
+                      static_cast<uint32_t>(trans.rx_data[3]);
+        ESP_LOGI(TAG, "LCD panel ID: 0x%08" PRIx32, id);
+        return id;
+    }
+
+    const LcdPanelConfig& GetLcdPanelConfig(LcdPanelType type) {
+        static const LcdPanelConfig gc9107 = {
+            .type = LcdPanelType::kGc9107,
+            .name = "GC9107",
+            .gap_x = 0,
+            .gap_y = 32,
+            .mirror_x = false,
+            .mirror_y = false,
+            .swap_xy = false,
+            .invert_color = true,
+        };
+        static const LcdPanelConfig st7735 = {
+            .type = LcdPanelType::kSt7735,
+            .name = "ST7735",
+            .gap_x = 1,
+            .gap_y = 2,
+            .mirror_x = true,
+            .mirror_y = true,
+            .swap_xy = false,
+            .invert_color = false,
+        };
+        return type == LcdPanelType::kSt7735 ? st7735 : gc9107;
+    }
+
+    LcdPanelConfig DetectLcdPanel() {
+        uint32_t id = ReadLcdPanelId();
+        if (id == 0x7c89f000 || id == 0x7c89f001) {
+            ESP_LOGI(TAG, "Detected ST7735 display");
+            return GetLcdPanelConfig(LcdPanelType::kSt7735);
+        }
+        if ((id & 0x00FFFFFF) == 0x83760f || id == 0x83760f00) {
+            ESP_LOGI(TAG, "Detected GC9107 display");
+            return GetLcdPanelConfig(LcdPanelType::kGc9107);
+        }
+        ESP_LOGW(TAG, "Unknown LCD panel ID 0x%08" PRIx32 ", fallback to GC9107", id);
+        return GetLcdPanelConfig(LcdPanelType::kGc9107);
+    }
+
+    void InitializeLcdDisplay(const LcdPanelConfig& config) {
+        ESP_LOGI(TAG, "Init %s display", config.name);
 
         ESP_LOGI(TAG, "Install panel IO");
-        esp_lcd_panel_io_handle_t io_handle = NULL;
+        esp_lcd_panel_io_handle_t io_handle = nullptr;
         esp_lcd_panel_io_spi_config_t io_config = {};
-        io_config.cs_gpio_num = GPIO_NUM_14;
-        io_config.dc_gpio_num = GPIO_NUM_42;
+        io_config.cs_gpio_num = LCD_CS_GPIO;
+        io_config.dc_gpio_num = LCD_DC_GPIO;
         io_config.spi_mode = 0;
         io_config.pclk_hz = 40 * 1000 * 1000;
         io_config.trans_queue_depth = 10;
         io_config.lcd_cmd_bits = 8;
         io_config.lcd_param_bits = 8;
         ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi(SPI3_HOST, &io_config, &io_handle));
-    
-        ESP_LOGI(TAG, "Install GC9A01 panel driver");
-        esp_lcd_panel_handle_t panel_handle = NULL;
-        gc9a01_vendor_config_t gc9107_vendor_config = {
-            .init_cmds = gc9107_lcd_init_cmds,
-            .init_cmds_size = sizeof(gc9107_lcd_init_cmds) / sizeof(gc9a01_lcd_init_cmd_t),
-        };
+
+        ESP_LOGI(TAG, "Install %s panel driver", config.name);
+        esp_lcd_panel_handle_t panel_handle = nullptr;
         esp_lcd_panel_dev_config_t panel_config = {};
-        panel_config.reset_gpio_num = GPIO_NUM_48;
+        panel_config.reset_gpio_num = LCD_RST_GPIO;
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(6, 0, 0)
         panel_config.rgb_ele_order = LCD_RGB_ELEMENT_ORDER_BGR;
 #else
         panel_config.rgb_endian = LCD_RGB_ENDIAN_BGR;
 #endif
         panel_config.bits_per_pixel = 16;
-        panel_config.vendor_config = &gc9107_vendor_config;
 
-        ESP_ERROR_CHECK(esp_lcd_new_panel_gc9a01(io_handle, &panel_config, &panel_handle));
+        if (config.type == LcdPanelType::kGc9107) {
+            gc9a01_vendor_config_t gc9107_vendor_config = {
+                .init_cmds = gc9107_lcd_init_cmds,
+                .init_cmds_size = sizeof(gc9107_lcd_init_cmds) / sizeof(gc9a01_lcd_init_cmd_t),
+            };
+            panel_config.vendor_config = &gc9107_vendor_config;
+            ESP_ERROR_CHECK(esp_lcd_new_panel_gc9a01(io_handle, &panel_config, &panel_handle));
+        } else {
+            ESP_ERROR_CHECK(esp_lcd_new_panel_st7789(io_handle, &panel_config, &panel_handle));
+        }
+
         ESP_ERROR_CHECK(esp_lcd_panel_reset(panel_handle));
         ESP_ERROR_CHECK(esp_lcd_panel_init(panel_handle));
-        ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_handle, true)); 
+        ESP_ERROR_CHECK(esp_lcd_panel_invert_color(panel_handle, config.invert_color));
+        ESP_ERROR_CHECK(esp_lcd_panel_swap_xy(panel_handle, config.swap_xy));
+        ESP_ERROR_CHECK(esp_lcd_panel_mirror(panel_handle, config.mirror_x, config.mirror_y));
+        ESP_ERROR_CHECK(esp_lcd_panel_set_gap(panel_handle, config.gap_x, config.gap_y));
+        ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_handle, true));
 
         display_ = new SpiLcdDisplay(io_handle, panel_handle,
-            DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, 
-            DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
-    }
-    
-    bool WaitForStepComplete(uint32_t timeout_ms) {
-        uint32_t start_time = xTaskGetTickCount() * portTICK_PERIOD_MS;
-        while (!startup_tutorial_step_complete_) {
-            if (xTaskGetTickCount() * portTICK_PERIOD_MS - start_time >= timeout_ms) {
-                return false;
-            }
-            vTaskDelay(pdMS_TO_TICKS(50));
-        }
-        startup_tutorial_step_complete_ = false;
-        return true;
-    }
-
-    void StartupTutorial() {
-        ESP_LOGI(TAG, "Displaying startup tutorial");
-
-        const uint32_t STEP_TIMEOUT_MS = 10000;
-        startup_tutorial_active_ = true;
-        startup_tutorial_step_ = 1;
-        startup_tutorial_step_complete_ = false;
-    
-        lv_obj_t* scr_origin = lv_screen_active();
-        lv_obj_t* scr_intro = nullptr;
-        lv_obj_t* img_tip = nullptr;
-        {
-            DisplayLockGuard lock(display_);
-            scr_intro = lv_obj_create(NULL);
-            auto dark_theme = LvglThemeManager::GetInstance().GetTheme("dark");
-            lv_obj_set_style_bg_color(scr_intro, dark_theme->background_color(), 0); 
-            img_tip = lv_image_create(scr_intro);
-            lv_screen_load(scr_intro);
-        }
-
-        struct TutorialStep {
-            const lv_image_dsc_t* img;
-            const char* text;
-        };
-        TutorialStep steps[] = {
-            {&ec_left, "左滑切换灯效"},
-            {&ec_right, "右滑调节音量"},
-            {&click, "点击唤醒对话"},
-        };
-
-        for (int i = 0; i < 3; i++) {
-            startup_tutorial_step_ = i + 1;
-            {
-                DisplayLockGuard lock(display_);
-                lv_obj_set_size(img_tip, 128, 128);
-                lv_image_set_src(img_tip, steps[i].img);
-                lv_obj_align(img_tip, LV_ALIGN_CENTER, 0, 0);
-                lv_refr_now(nullptr);
-            }
-            if (!WaitForStepComplete(STEP_TIMEOUT_MS)) {
-                ESP_LOGI(TAG, "Startup tutorial Step %d timeout", i + 1);
-            }
-        }
-        
-        // Cleanup
-        startup_tutorial_active_ = false;
-        startup_tutorial_step_ = 0;
-        {
-            DisplayLockGuard lock(display_);
-            if (scr_origin) lv_screen_load(scr_origin);
-            if (scr_intro) lv_obj_delete(scr_intro);
-            lv_refr_now(nullptr);
-        }
-        
-        ESP_LOGI(TAG, "Startup tutorial completed");
+                                    DISPLAY_WIDTH, DISPLAY_HEIGHT, 0, 0, config.mirror_x, config.mirror_y, config.swap_xy);
     }
 
     void InitializeButtons() {
@@ -460,7 +530,7 @@ public:
         I2cDetect(i2c_bus_external_);
         InitializeLp5562();
         InitializeSpi();
-        InitializeGc9107Display();
+        InitializeLcdDisplay(DetectLcdPanel());
         CheckEchoPyramidConnection();
         InitializeEchoPyramid();
         InitializeButtons();

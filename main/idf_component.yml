@@ -140,3 +140,4 @@ dependencies:
     version: '>=5.5.2'
   m5stack/m5pm1: ^1.0.5
   m5stack/m5ioe1: ^1.0.8
+  espressif/cjson: ^1.7.19~1
