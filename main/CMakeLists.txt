@@ -1042,6 +1042,11 @@ if(CONFIG_BOARD_TYPE_ESP_VOCAT)
         espressif__touch_button_sensor
     )
 endif()
+if(BOARD_TYPE STREQUAL "m5stack-corep4")
+    list(APPEND MAIN_PRIV_REQUIRES_EXTRA
+        esp_lcd_st7102
+    )
+endif()
 if(BOARD_TYPE STREQUAL "m5stack-tab5")
     list(APPEND MAIN_PRIV_REQUIRES_EXTRA
         esp_lcd_st7121
@@ -1076,7 +1081,6 @@ idf_component_register(SRCS ${SOURCES}
                         efuse
                         bt
                         fatfs
-                        esp_lcd_st7102
                         ${MAIN_PRIV_REQUIRES_EXTRA}
                     )
 
