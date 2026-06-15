@@ -76,6 +76,42 @@ static const gc9a01_lcd_init_cmd_t gc9107_lcd_init_cmds[] = {
     14, 0},
 };
 
+class Lp5562 : public I2cDevice {
+public:
+    Lp5562(i2c_master_bus_handle_t i2c_bus, uint8_t addr) : I2cDevice(i2c_bus, addr) {
+        WriteReg(0x00, 0B01000000); // Set chip_en to 1
+        WriteReg(0x08, 0B00000001); // Enable internal clock
+        WriteReg(0x70, 0B00000000); // Configure all LED outputs to be controlled from I2C registers
+
+        // PWM clock frequency 558 Hz
+        auto data = ReadReg(0x08);
+        data = data | 0B01000000;
+        WriteReg(0x08, data);
+    }
+
+    void SetBrightness(uint8_t brightness) {
+        brightness = brightness * 255 / 100;
+        WriteReg(0x0E, brightness);
+    }
+};
+
+class CustomBacklight : public Backlight {
+public:
+    CustomBacklight(Lp5562* lp5562) : lp5562_(lp5562) {}
+
+protected:
+    void SetBrightnessImpl(uint8_t brightness) override {
+        if (lp5562_) {
+            lp5562_->SetBrightness(brightness);
+        } else {
+            ESP_LOGE(TAG, "LP5562 not available");
+        }
+    }
+
+private:
+    Lp5562* lp5562_ = nullptr;
+};
+
 class AtomS3rEchoPyramidBoard : public WifiBoard {
 private:
     enum class LcdPanelType {
@@ -95,9 +131,11 @@ private:
     };
 
     i2c_master_bus_handle_t i2c_bus_external_;
+    i2c_master_bus_handle_t i2c_bus_internal_;
     EchoPyramid* echo_pyramid_ = nullptr;
     Si5351* si5351_ = nullptr;
     Aw87559* aw87559_ = nullptr;
+    Lp5562* lp5562_ = nullptr;
     Display* display_ = nullptr;
     Button boot_button_;
     bool is_echo_pyramid_connected_ = false;
@@ -121,6 +159,11 @@ private:
             },
         };
         ESP_ERROR_CHECK(i2c_new_master_bus(&i2c_bus_cfg, &i2c_bus_external_));
+
+        i2c_bus_cfg.i2c_port = I2C_NUM_0;
+        i2c_bus_cfg.sda_io_num = GPIO_NUM_45;
+        i2c_bus_cfg.scl_io_num = GPIO_NUM_0;
+        ESP_ERROR_CHECK(i2c_new_master_bus(&i2c_bus_cfg, &i2c_bus_internal_));
     }
 
     void I2cDetect(i2c_master_bus_handle_t i2c_bus) {
@@ -165,6 +208,11 @@ private:
                 esp_restart();
             }
         }
+    }
+
+    void InitializeLp5562() {
+        ESP_LOGI(TAG, "Init LP5562");
+        lp5562_ = new Lp5562(i2c_bus_internal_, LED_DRIVER_LP5562_ADDR);
     }
 
     void InitializeEchoPyramid() {
@@ -314,7 +362,11 @@ private:
         esp_lcd_panel_handle_t panel_handle = nullptr;
         esp_lcd_panel_dev_config_t panel_config = {};
         panel_config.reset_gpio_num = LCD_RST_GPIO;
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(6, 0, 0)
+        panel_config.rgb_ele_order = LCD_RGB_ELEMENT_ORDER_BGR;
+#else
         panel_config.rgb_endian = LCD_RGB_ENDIAN_BGR;
+#endif
         panel_config.bits_per_pixel = 16;
 
         if (config.type == LcdPanelType::kGc9107) {
@@ -337,8 +389,7 @@ private:
         ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_handle, true));
 
         display_ = new SpiLcdDisplay(io_handle, panel_handle,
-            DISPLAY_WIDTH, DISPLAY_HEIGHT, 0, 0,
-            config.mirror_x, config.mirror_y, config.swap_xy);
+                                    DISPLAY_WIDTH, DISPLAY_HEIGHT, 0, 0, config.mirror_x, config.mirror_y, config.swap_xy);
     }
     
     bool WaitForStepComplete(uint32_t timeout_ms) {
@@ -534,6 +585,7 @@ public:
         AtomS3rEchoPyramidBoard() : boot_button_(BOOT_BUTTON_GPIO) {
         InitializeI2c();
         I2cDetect(i2c_bus_external_);
+        InitializeLp5562();
         InitializeSpi();
         InitializeLcdDisplay(DetectLcdPanel());
         CheckEchoPyramidConnection();
@@ -568,7 +620,7 @@ public:
     }
 
     virtual Backlight* GetBacklight() override {
-        static PwmBacklight backlight(DISPLAY_BACKLIGHT_PIN, DISPLAY_BACKLIGHT_OUTPUT_INVERT, 256);
+        static CustomBacklight backlight(lp5562_);
         return &backlight;
     }
 };

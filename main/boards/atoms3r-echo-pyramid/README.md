@@ -74,7 +74,7 @@ esptool.py --chip esp32s3 merge_bin \
     0x8000 build/partition_table/partition-table.bin \
     0xd000 build/ota_data_initial.bin \
     0x20000 build/xiaozhi.bin \
-    0x600000 build/generated_assets.bin \
+        0x600000 build/generated_assets.bin \
     -o AtomS3R-EchoPyramid-XiaoZhi-v2.2.6_0x00.bin
 ```
 
