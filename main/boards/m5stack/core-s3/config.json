@@ -7,6 +7,8 @@
             "name": "m5stack-core-s3",
             "sdkconfig_append": [
                 "CONFIG_SPIRAM_MODE_QUAD=y",
+                "CONFIG_USE_AUDIO_PROCESSOR=y",
+                "CONFIG_USE_DEVICE_AEC=y",
                 "CONFIG_CAMERA_GC0308=y",
                 "CONFIG_CAMERA_GC0308_AUTO_DETECT_DVP_INTERFACE_SENSOR=y",
                 "CONFIG_CAMERA_GC0308_DVP_YUV422_320X240_20FPS=y"

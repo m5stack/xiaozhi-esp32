@@ -6,6 +6,12 @@
 
 #define TAG "CoreS3AudioCodec"
 
+namespace {
+constexpr int kAw88298I2sControlRegister = 0x06;
+constexpr int kAw88298SampleWidthMask = 0xF0;
+constexpr int kAw88298SampleWidth32Bits = 0xE0;
+}
+
 CoreS3AudioCodec::CoreS3AudioCodec(void* i2c_master_handle, int input_sample_rate, int output_sample_rate,
     gpio_num_t mclk, gpio_num_t bclk, gpio_num_t ws, gpio_num_t dout, gpio_num_t din,
     uint8_t aw88298_addr, uint8_t es7210_addr, bool input_reference) {
@@ -187,6 +193,14 @@ void CoreS3AudioCodec::SetOutputVolume(int volume) {
     AudioCodec::SetOutputVolume(volume);
 }
 
+void CoreS3AudioCodec::ConfigureOutputForAec() {
+    int i2s_control = 0;
+    ESP_ERROR_CHECK(esp_codec_dev_read_reg(output_dev_, kAw88298I2sControlRegister, &i2s_control));
+    i2s_control = (i2s_control & ~kAw88298SampleWidthMask) | kAw88298SampleWidth32Bits;
+    ESP_ERROR_CHECK(esp_codec_dev_write_reg(output_dev_, kAw88298I2sControlRegister, i2s_control));
+    ESP_LOGI(TAG, "AW88298 configured for 32-bit slots (64fs) with 16-bit PCM");
+}
+
 void CoreS3AudioCodec::EnableInput(bool enable) {
     if (enable == input_enabled_) {
         return;
@@ -194,7 +208,7 @@ void CoreS3AudioCodec::EnableInput(bool enable) {
     if (enable) {
         esp_codec_dev_sample_info_t fs = {
             .bits_per_sample = 16,
-            .channel = 2,
+            .channel = 4,
             .channel_mask = ESP_CODEC_DEV_MAKE_CHANNEL_MASK(0),
             .sample_rate = (uint32_t)output_sample_rate_,
             .mclk_multiple = 0,
@@ -203,6 +217,9 @@ void CoreS3AudioCodec::EnableInput(bool enable) {
             fs.channel_mask |= ESP_CODEC_DEV_MAKE_CHANNEL_MASK(1);
         }
         ESP_ERROR_CHECK(esp_codec_dev_open(input_dev_, &fs));
+        if (input_reference_ && output_enabled_) {
+            ConfigureOutputForAec();
+        }
         ESP_ERROR_CHECK(esp_codec_dev_set_in_channel_gain(input_dev_, ESP_CODEC_DEV_MAKE_CHANNEL_MASK(0), input_gain_));
     } else {
         ESP_ERROR_CHECK(esp_codec_dev_close(input_dev_));
@@ -224,6 +241,9 @@ void CoreS3AudioCodec::EnableOutput(bool enable) {
             .mclk_multiple = 0,
         };
         ESP_ERROR_CHECK(esp_codec_dev_open(output_dev_, &fs));
+        if (input_reference_ && input_enabled_) {
+            ConfigureOutputForAec();
+        }
         ESP_ERROR_CHECK(esp_codec_dev_set_out_vol(output_dev_, output_volume_));
     } else {
         ESP_ERROR_CHECK(esp_codec_dev_close(output_dev_));
